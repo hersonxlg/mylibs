@@ -1,27 +1,28 @@
-/* * fenster_pixel_perfect.h
- * Librería STB-style para forzar un lienzo pixel-perfect en Windows usando fenster.h
+/* * fenster_strict_size.h
+ * Librería STB-style para forzar un tamaño estricto y bloquear el redimensionamiento
+ * en Windows usando fenster.h
  */
 
-#ifndef FENSTER_PIXEL_PERFECT_H
-#define FENSTER_PIXEL_PERFECT_H
+#ifndef FENSTER_STRICT_SIZE_H
+#define FENSTER_STRICT_SIZE_H
 
 #include "fenster.h"
 #include <windows.h>
 
 // Declaración de la función pública
-void fenster_pixel_perfect(struct fenster *f);
+void fenster_strict_size(struct fenster *f);
 
-#endif // FENSTER_PIXEL_PERFECT_H
+#endif // FENSTER_STRICT_SIZE_H
 
 // ============================================================================
 // IMPLEMENTACIÓN
 // ============================================================================
-#ifdef FENSTER_PIXEL_PERFECT_IMPLEMENTATION
+#ifdef FENSTER_STRICT_SIZE_IMPLEMENTATION
 
 static WNDPROC fenster_original_proc;
 
 // Hook para interceptar mensajes de Windows y bloquear el redimensionamiento
-static LRESULT CALLBACK fenster_pp_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+static LRESULT CALLBACK fenster_ss_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     // Si Windows pregunta por los límites de la ventana...
     if (msg == WM_GETMINMAXINFO) {
         MINMAXINFO *mmi = (MINMAXINFO*)lParam;
@@ -45,7 +46,7 @@ static LRESULT CALLBACK fenster_pp_proc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
 }
 
 // Función interna que ajusta midiendo la diferencia real en pantalla
-static void fenster_pp_fix(HWND hwnd, int target_w, int target_h) {
+static void fenster_ss_fix(HWND hwnd, int target_w, int target_h) {
     RECT client, win;
     
     // Obtenemos el tamaño real de dibujo que Windows nos dio
@@ -67,19 +68,19 @@ static void fenster_pp_fix(HWND hwnd, int target_w, int target_h) {
 }
 
 // Función principal que el usuario llamará en su main
-void fenster_pixel_perfect(struct fenster *f) {
+void fenster_strict_size(struct fenster *f) {
     HWND hwnd = GetActiveWindow();
     if (!hwnd) return;
 
     // 1. Ajuste empírico: 
     // Repetimos 3 veces para asegurar que el DWM de Windows estabilice sus medidas internas.
     for (int i = 0; i < 3; i++) {
-        fenster_pp_fix(hwnd, f->width, f->height);
+        fenster_ss_fix(hwnd, f->width, f->height);
     }
 
     // 2. Inyectamos nuestro Hook
     // Guardamos el proceso original para no romper la ventana y asignamos el nuestro
-    fenster_original_proc = (WNDPROC)SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)fenster_pp_proc);
+    fenster_original_proc = (WNDPROC)SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)fenster_ss_proc);
 }
 
-#endif // FENSTER_PIXEL_PERFECT_IMPLEMENTATION
+#endif // FENSTER_STRICT_SIZE_IMPLEMENTATION
