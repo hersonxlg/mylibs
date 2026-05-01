@@ -42,12 +42,16 @@ typedef struct {
     int height;
 } r2d_texture;
 
+// NUEVO: Motor Tipográfico (Texture Atlas)
 typedef struct {
-    void *info;          // Puntero genérico para evitar dependencia de stbtt en la cabecera
-    unsigned char *data; // Datos crudos del archivo TTF
-    float size;
+    uint8_t *atlas_pixels;  // La imagen gigante pre-renderizada (Canal Alpha)
+    int atlas_width;        // Ancho de la imagen (ej. 512)
+    int atlas_height;       // Alto de la imagen (ej. 512)
+    void *char_data;        // Diccionario: coordenadas UV y métricas de cada letra
+    float size;             // Tamaño con el que fue horneada
 } r2d_font;
 
+// ACTUALIZADO: El lienzo ya no depende de la fuente (Stateless)
 typedef struct {
     uint32_t *buffer;
     int width;
@@ -56,14 +60,13 @@ typedef struct {
     int clip_y0;
     int clip_x1;
     int clip_y1;
-    r2d_font *current_font; // Fuente activa para renderizado de texto
 } r2d_canvas;
 
 // ============================================================================
 // 2. DECLARACIONES DE FUNCIONES (API) Y UTILIDADES GLOBALES
 // ============================================================================
 
-// Utilidad matemática global y segura (Reemplaza a la macro problemática)
+// Utilidad matemática global y segura
 static inline float r2d_clamp(float val, float min, float max) {
     if (val < min) return min;
     if (val > max) return max;
@@ -119,11 +122,13 @@ void r2d_fill_triangle_uv(r2d_canvas *canvas, r2d_vec2 p1, r2d_vec2 p2, r2d_vec2
 void r2d_draw_sprite_ex(r2d_canvas *canvas, r2d_texture *tex, int x, int y, float scale, float rotation, uint8_t alpha);
 void r2d_free_texture(r2d_texture *tex);
 
-// -- Motor de Tipografía (Aislado) --
+// -- Motor de Tipografía (Basado en Texture Atlas) --
 #ifdef STB_TRUETYPE_IMPLEMENTATION
-void r2d_load_font(r2d_font *font, const char *filename, float size);
-void r2d_draw_text(r2d_canvas *canvas, const char *text, int x, int y, uint32_t color);
-void r2d_free_font(r2d_font *font); // <-- NUEVO: Prevención de Memory Leak
+// NUEVAS FIRMAS LIMPIAS
+r2d_font r2d_load_font(const char *filename, float size);
+r2d_vec2 r2d_measure_text(r2d_font font, const char *text);
+void r2d_draw_text(r2d_canvas *canvas, r2d_font font, const char *text, int x, int y, uint32_t color);
+void r2d_free_font(r2d_font *font);
 #endif
 
 #endif // RASTER2D_H
@@ -169,7 +174,6 @@ r2d_canvas r2d_init_canvas(uint32_t *buffer, int width, int height) {
     c.clip_y0 = 0;
     c.clip_x1 = width;
     c.clip_y1 = height;
-    c.current_font = NULL;
     return c;
 }
 
@@ -345,7 +349,6 @@ void r2d_fill_triangle(r2d_canvas *canvas, int x1, int y1, int x2, int y2, int x
     }
 }
 
-// OPTIMIZADO: Ahora usa aritmética de bits en lugar de floats
 void r2d_draw_pixel_blend(r2d_canvas *canvas, int x, int y, uint32_t color, float alpha) {
     if (x >= canvas->clip_x0 && x < canvas->clip_x1 && y >= canvas->clip_y0 && y < canvas->clip_y1) {
         uint8_t alpha_u8 = (uint8_t)(r2d_clamp(alpha, 0.0f, 1.0f) * 255.0f);
@@ -430,7 +433,6 @@ void r2d_fill_triangle_uv(r2d_canvas *canvas, r2d_vec2 p1, r2d_vec2 p2, r2d_vec2
                 int tx = (int)(u * (tex->width - 1));
                 int ty = (int)(v * (tex->height - 1));
 
-                // OPTIMIZADO: Prevención de desbordamiento de índice por errores de redondeo float
                 if (tx < 0) tx = 0; if (tx >= tex->width) tx = tex->width - 1;
                 if (ty < 0) ty = 0; if (ty >= tex->height) ty = tex->height - 1;
 
@@ -485,78 +487,128 @@ void r2d_free_texture(r2d_texture *tex) {
     }
 }
 
-// --- Implementación: Motor de Tipografía ---
+// --- Implementación: Motor de Tipografía (Texture Atlas Refactor) ---
 #ifdef STB_TRUETYPE_IMPLEMENTATION
-
 #include "stb_truetype.h"
 
-void r2d_load_font(r2d_font *font, const char *filename, float size) {
+// Retorna la estructura lista. Usa un Atlas estándar de 512x512
+r2d_font r2d_load_font(const char *filename, float size) {
+    r2d_font font = {0};
+    
     FILE *file = fopen(filename, "rb");
-    if (!file) {
-        font->data = NULL;
-        font->info = NULL;
-        return;
-    }
+    if (!file) return font;
 
     fseek(file, 0, SEEK_END);
     long file_size = ftell(file);
     fseek(file, 0, SEEK_SET);
 
-    font->data = (unsigned char *)malloc(file_size);
-    fread(font->data, 1, file_size, file);
+    unsigned char *ttf_buffer = (unsigned char *)malloc(file_size);
+    if (!ttf_buffer) {
+        fclose(file);
+        return font;
+    }
+    
+    fread(ttf_buffer, 1, file_size, file);
     fclose(file);
 
-    font->info = malloc(sizeof(stbtt_fontinfo));
-    // OPTIMIZADO: Prevención de punteros colgantes si InitFont falla
-    if (!font->info || !stbtt_InitFont((stbtt_fontinfo *)font->info, font->data, 0)) {
-        free(font->data);
-        free(font->info);
-        font->data = NULL;
-        font->info = NULL;
-        return;
+    font.atlas_width = 512;
+    font.atlas_height = 512;
+    font.atlas_pixels = (uint8_t *)malloc(font.atlas_width * font.atlas_height);
+    font.char_data = malloc(sizeof(stbtt_bakedchar) * 96); // ASCII 32 a 126
+    font.size = size;
+
+    if (font.atlas_pixels && font.char_data) {
+        // Hornear 96 caracteres en el mapa de bits (Desde el espacio ' ' hasta '~')
+        stbtt_BakeFontBitmap(ttf_buffer, 0, size, font.atlas_pixels, font.atlas_width, font.atlas_height, 32, 96, (stbtt_bakedchar *)font.char_data);
+    } else {
+        if (font.atlas_pixels) free(font.atlas_pixels);
+        if (font.char_data) free(font.char_data);
+        font.atlas_pixels = NULL;
+        font.char_data = NULL;
     }
-    font->size = size;
+
+    // ELIMINACIÓN DE MEMORY LEAK: ¡Ya no guardamos el TTF original en RAM!
+    free(ttf_buffer); 
+    return font;
 }
 
-// OPTIMIZADO: Función de liberación para evitar Memory Leaks
+// Limpieza de memoria RAM del Atlas
 void r2d_free_font(r2d_font *font) {
     if (font) {
-        if (font->data) { free(font->data); font->data = NULL; }
-        if (font->info) { free(font->info); font->info = NULL; }
+        if (font->atlas_pixels) { free(font->atlas_pixels); font->atlas_pixels = NULL; }
+        if (font->char_data) { free(font->char_data); font->char_data = NULL; }
     }
 }
 
-void r2d_draw_text(r2d_canvas *canvas, const char *text, int x, int y, uint32_t color) {
-    if (!canvas->current_font || !canvas->current_font->info) return;
+// Recorre las métricas de stb_truetype sin dibujar para calcular el ancho total
+r2d_vec2 r2d_measure_text(r2d_font font, const char *text) {
+    r2d_vec2 size = {0.0f, 0.0f};
+    if (!font.char_data || !text) return size;
 
-    stbtt_fontinfo *info = (stbtt_fontinfo *)canvas->current_font->info;
-    float scale = stbtt_ScaleForPixelHeight(info, canvas->current_font->size);
-    int ascent, descent, lineGap;
-    stbtt_GetFontVMetrics(info, &ascent, &descent, &lineGap);
-    ascent = (int)(ascent * scale);
+    stbtt_bakedchar *cdata = (stbtt_bakedchar *)font.char_data;
+    float x = 0.0f;
+    float y = 0.0f;
+    float min_y = 10000.0f;
+    float max_y = -10000.0f;
 
-    int cur_x = x;
-    int len = strlen(text);
+    while (*text) {
+        if (*text >= 32 && *text < 128) {
+            stbtt_aligned_quad q;
+            stbtt_GetBakedQuad(cdata, font.atlas_width, font.atlas_height, *text - 32, &x, &y, &q, 1);
+            if (q.y0 < min_y) min_y = q.y0;
+            if (q.y1 > max_y) max_y = q.y1;
+        }
+        text++;
+    }
+    
+    size.x = x; 
+    size.y = (max_y > min_y) ? (max_y - min_y) : font.size;
+    return size;
+}
 
-    for (int i = 0; i < len; ++i) {
-        int w, h, xoff, yoff;
-        unsigned char *bitmap = stbtt_GetCodepointBitmap(info, 0, scale, text[i], &w, &h, &xoff, &yoff);
+// Renderizado Ultrarrápido: Solo recorta píxeles del Atlas, cero cálculos de curvas.
+void r2d_draw_text(r2d_canvas *canvas, r2d_font font, const char *text, int x, int y, uint32_t color) {
+    if (!font.char_data || !font.atlas_pixels || !text) return;
 
-        if (bitmap) {
-            for (int by = 0; by < h; ++by) {
-                for (int bx = 0; bx < w; ++bx) {
-                    unsigned char alpha = bitmap[by * w + bx];
-                    if (alpha > 0) {
-                        uint32_t final_color = (color & 0x00FFFFFF) | (alpha << 24);
-                        r2d_draw_pixel(canvas, cur_x + xoff + bx, y + ascent + yoff + by, final_color);
+    stbtt_bakedchar *cdata = (stbtt_bakedchar *)font.char_data;
+    float cursor_x = (float)x;
+    float cursor_y = (float)y;
+
+    while (*text) {
+        if (*text >= 32 && *text < 128) {
+            stbtt_aligned_quad q;
+            stbtt_GetBakedQuad(cdata, font.atlas_width, font.atlas_height, *text - 32, &cursor_x, &cursor_y, &q, 1);
+
+            int start_x = (int)q.x0;
+            int end_x = (int)q.x1;
+            int start_y = (int)q.y0;
+            int end_y = (int)q.y1;
+
+            int tex_start_x = (int)(q.s0 * font.atlas_width);
+            int tex_start_y = (int)(q.t0 * font.atlas_height);
+
+            for (int iy = start_y, ty = tex_start_y; iy < end_y; iy++, ty++) {
+                for (int ix = start_x, tx = tex_start_x; ix < end_x; ix++, tx++) {
+                    // Verificación de recorte del lienzo (Scissor)
+                    if (ix >= canvas->clip_x0 && ix < canvas->clip_x1 && iy >= canvas->clip_y0 && iy < canvas->clip_y1) {
+                        // Extracción segura del atlas
+                        if (tx >= 0 && tx < font.atlas_width && ty >= 0 && ty < font.atlas_height) {
+                            uint8_t alpha = font.atlas_pixels[ty * font.atlas_width + tx];
+                            
+                            if (alpha > 0) {
+                                uint32_t bg = canvas->buffer[iy * canvas->width + ix];
+                                uint8_t global_alpha = (color >> 24) & 0xFF;
+                                uint8_t final_alpha = (alpha * global_alpha) / 255;
+                                
+                                uint32_t final_color = (color & 0x00FFFFFF) | (final_alpha << 24);
+                                canvas->buffer[iy * canvas->width + ix] = r2d_blend_color(final_color, bg, final_alpha);
+                            }
+                        }
                     }
                 }
             }
-            stbtt_FreeBitmap(bitmap, NULL);
         }
-        int ax;
-        stbtt_GetCodepointHMetrics(info, text[i], &ax, NULL);
-        cur_x += (int)(ax * scale);
+        text++;
     }
 }
 #endif // STB_TRUETYPE_IMPLEMENTATION
