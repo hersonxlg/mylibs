@@ -82,6 +82,8 @@ void r2d_pop_scissor(r2d_canvas *canvas);
 // Alias directos para Scissor (Compatibilidad)
 void r2d_set_scissor(r2d_canvas *canvas, int x, int y, int w, int h);
 void r2d_reset_scissor(r2d_canvas *canvas);
+void r2d_push_scissor_v(r2d_canvas *canvas, r2d_vec2 pos, r2d_vec2 size);
+void r2d_set_scissor_v(r2d_canvas *canvas, r2d_vec2 pos, r2d_vec2 size);
 
 // -- Primitivas Geométricas (Coordenadas Crudas) --
 void r2d_fill_rect(r2d_canvas *canvas, int x, int y, int w, int h, uint32_t color);
@@ -105,7 +107,10 @@ void r2d_draw_circle_v(r2d_canvas *canvas, r2d_vec2 center, int r, uint32_t colo
 void r2d_fill_sector_v(r2d_canvas *canvas, r2d_vec2 center, int r, float start_angle, float end_angle, uint32_t color);
 void r2d_draw_line_v(r2d_canvas *canvas, r2d_vec2 p0, r2d_vec2 p1, uint32_t color);
 void r2d_fill_triangle_v(r2d_canvas *canvas, r2d_vec2 p1, r2d_vec2 p2, r2d_vec2 p3, uint32_t color);
-void r2d_draw_triangle_vec(r2d_canvas *canvas, r2d_vec2 p0, r2d_vec2 p1, r2d_vec2 p2, uint32_t color);
+void r2d_draw_triangle_v(r2d_canvas *canvas, r2d_vec2 p0, r2d_vec2 p1, r2d_vec2 p2, uint32_t color);
+void r2d_draw_arc_v(r2d_canvas *canvas, r2d_vec2 center, int r, float start_angle, float end_angle, uint32_t color);
+void r2d_draw_pixel_blend_v(r2d_canvas *canvas, r2d_vec2 pos, uint32_t color, float alpha);
+void r2d_draw_sprite_ex_v(r2d_canvas *canvas, r2d_texture *tex, r2d_vec2 pos, float scale, float rotation, uint8_t alpha);
 
 // -- Curvas --
 void r2d_draw_spline_catmull_rom(r2d_canvas *canvas, r2d_vec2 p0, r2d_vec2 p1, r2d_vec2 p2, r2d_vec2 p3, uint32_t color, int segments);
@@ -123,13 +128,13 @@ void r2d_draw_sprite_ex(r2d_canvas *canvas, r2d_texture *tex, int x, int y, floa
 void r2d_free_texture(r2d_texture *tex);
 
 // -- Motor de Tipografía (Basado en Texture Atlas) --
-#ifdef STB_TRUETYPE_IMPLEMENTATION
+
 // NUEVAS FIRMAS LIMPIAS
 r2d_font r2d_load_font(const char *filename, float size);
 r2d_vec2 r2d_measure_text(r2d_font font, const char *text);
 void r2d_draw_text(r2d_canvas *canvas, r2d_font font, const char *text, int x, int y, uint32_t color);
+void r2d_draw_text_v(r2d_canvas *canvas, r2d_font font, const char *text, r2d_vec2 pos, uint32_t color);
 void r2d_free_font(r2d_font *font);
-#endif
 
 #endif // RASTER2D_H
 
@@ -199,6 +204,12 @@ void r2d_pop_scissor(r2d_canvas *canvas) {
 
 void r2d_set_scissor(r2d_canvas *canvas, int x, int y, int w, int h) { r2d_push_scissor(canvas, x, y, w, h); }
 void r2d_reset_scissor(r2d_canvas *canvas) { r2d_pop_scissor(canvas); }
+void r2d_push_scissor_v(r2d_canvas *canvas, r2d_vec2 pos, r2d_vec2 size) { 
+    r2d_push_scissor(canvas, (int)pos.x, (int)pos.y, (int)size.x, (int)size.y); 
+}
+void r2d_set_scissor_v(r2d_canvas *canvas, r2d_vec2 pos, r2d_vec2 size) { 
+    r2d_push_scissor_v(canvas, pos, size); 
+}
 
 // --- Implementación: Geometría Cruda ---
 void r2d_fill_rect(r2d_canvas *canvas, int x, int y, int w, int h, uint32_t color) {
@@ -365,7 +376,18 @@ void r2d_draw_circle_v(r2d_canvas *canvas, r2d_vec2 center, int r, uint32_t colo
 void r2d_fill_sector_v(r2d_canvas *canvas, r2d_vec2 center, int r, float start_angle, float end_angle, uint32_t color) { r2d_fill_sector(canvas, (int)center.x, (int)center.y, r, start_angle, end_angle, color); }
 void r2d_draw_line_v(r2d_canvas *canvas, r2d_vec2 p0, r2d_vec2 p1, uint32_t color) { r2d_draw_line(canvas, (int)p0.x, (int)p0.y, (int)p1.x, (int)p1.y, color); }
 void r2d_fill_triangle_v(r2d_canvas *canvas, r2d_vec2 p1, r2d_vec2 p2, r2d_vec2 p3, uint32_t color) { r2d_fill_triangle(canvas, (int)p1.x, (int)p1.y, (int)p2.x, (int)p2.y, (int)p3.x, (int)p3.y, color); }
-void r2d_draw_triangle_vec(r2d_canvas *canvas, r2d_vec2 p0, r2d_vec2 p1, r2d_vec2 p2, uint32_t color) { r2d_draw_triangle(canvas, (int)p0.x, (int)p0.y, (int)p1.x, (int)p1.y, (int)p2.x, (int)p2.y, color); }
+void r2d_draw_triangle_v(r2d_canvas *canvas, r2d_vec2 p0, r2d_vec2 p1, r2d_vec2 p2, uint32_t color) { r2d_draw_triangle(canvas, (int)p0.x, (int)p0.y, (int)p1.x, (int)p1.y, (int)p2.x, (int)p2.y, color); }
+void r2d_draw_arc_v(r2d_canvas *canvas, r2d_vec2 center, int r, float start_angle, float end_angle, uint32_t color) { 
+    r2d_draw_arc(canvas, (int)center.x, (int)center.y, r, start_angle, end_angle, color); 
+}
+
+void r2d_draw_pixel_blend_v(r2d_canvas *canvas, r2d_vec2 pos, uint32_t color, float alpha) { 
+    r2d_draw_pixel_blend(canvas, (int)pos.x, (int)pos.y, color, alpha); 
+}
+
+void r2d_draw_sprite_ex_v(r2d_canvas *canvas, r2d_texture *tex, r2d_vec2 pos, float scale, float rotation, uint8_t alpha) { 
+    r2d_draw_sprite_ex(canvas, tex, (int)pos.x, (int)pos.y, scale, rotation, alpha); 
+}
 
 // --- Implementación: Matrices y Cámara ---
 r2d_mat3 r2d_mat3_translate(float x, float y) { r2d_mat3 res = { {1, 0, x,  0, 1, y,  0, 0, 1} }; return res; }
@@ -488,7 +510,7 @@ void r2d_free_texture(r2d_texture *tex) {
 }
 
 // --- Implementación: Motor de Tipografía (Texture Atlas Refactor) ---
-#ifdef STB_TRUETYPE_IMPLEMENTATION
+#define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
 
 // Retorna la estructura lista. Usa un Atlas estándar de 512x512
@@ -611,6 +633,10 @@ void r2d_draw_text(r2d_canvas *canvas, r2d_font font, const char *text, int x, i
         text++;
     }
 }
-#endif // STB_TRUETYPE_IMPLEMENTATION
+// Wrapper de r2d_draw_text usando r2d_vec2
+void r2d_draw_text_v(r2d_canvas *canvas, r2d_font font, const char *text, r2d_vec2 pos, uint32_t color) {
+    r2d_draw_text(canvas, font, text, (int)pos.x, (int)pos.y, color);
+}
+
 
 #endif // RASTER2D_IMPLEMENTATION
